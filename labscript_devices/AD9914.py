@@ -245,9 +245,9 @@ class AD9914(IntermediateDevice):
 
 
         if numDDSProfs:
-            profile_dtypes = [('freq%d'%i,np.float) for i in range(numDDSProfs)] + \
-                            [('phase%d'%i,np.float) for i in range(numDDSProfs)] + \
-                            [('amp%d'%i,np.float) for i in range(numDDSProfs)]
+            profile_dtypes = [('freq%d'%i,float) for i in range(numDDSProfs)] + \
+                            [('phase%d'%i,float) for i in range(numDDSProfs)] + \
+                            [('amp%d'%i,float) for i in range(numDDSProfs)]
 
 
             profile_table = np.zeros(1, dtype=profile_dtypes)
@@ -261,12 +261,12 @@ class AD9914(IntermediateDevice):
 
 
         if output.sweep:
-            sweep_dtypes = [('sweep_type',np.int),
-                            ('sweep_low',np.float),
-                            ('sweep_high',np.float),
-                            ('sweep_risetime',np.float),
-                            ('sweep_falltime',np.float),
-                            ('sweep_dt',np.float)]
+            sweep_dtypes = [('sweep_type',int),
+                            ('sweep_low',float),
+                            ('sweep_high',float),
+                            ('sweep_risetime',float),
+                            ('sweep_falltime',float),
+                            ('sweep_dt',float)]
 
             sweep_table = np.empty(1, dtype=sweep_dtypes)
 
