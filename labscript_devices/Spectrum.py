@@ -74,7 +74,6 @@ class pulse:
             s = f"Painted sweep using function {self.painting_function} painting frequency: {self.painting_freq}, painting_list: {self.painting_list}"
             try:
                 s = s + f"{self.painting_function.extra_params}"
-                print(s)
             except Exception as e:
                 print(e)
             return s
@@ -117,7 +116,7 @@ class waveform:
         self.has_mask = True
         self.remove_self_interaction = remove_self_interaction
         if mask == None:
-            mask = np.vectorize(lambda x: 1)
+            mask = lambda x: np.ones_like(x)
             self.has_mask = False
         self.mask = mask
         # Make new copies of pulses.  Why do we need to do this??
@@ -224,9 +223,9 @@ class sequence_instr:
 
 ##### Labscript classes #######################################################
 class Spectrum(IntermediateDevice):
-    def __init__(self, name, parent_device, card_address, trigger, triggerDur=5e-6):
+    def __init__(self, name, parent_device, card_address, trigger, triggerDur=5e-6, worker=None):
         self.BLACS_connection = card_address
-        Device.__init__(self, name, parent_device, connection=self.BLACS_connection)
+        Device.__init__(self, name, parent_device, connection=self.BLACS_connection, worker=worker)
 
         self.set_mode("Off")  # Initialize data structure
         self.samplesPerChunk = 32
@@ -320,20 +319,21 @@ class Spectrum(IntermediateDevice):
         modulation_frequencies=[0],
         modulation_amplitudes=[0],
         modulation_phases=[0],
+        ramp_type="static",
         mask=None,
     ):
         if duration == 0:
             return t
         t = self.sweep_comb(
-            t,
-            duration,
-            [freq],
-            [freq],
-            [amplitude],
-            [phase],
-            ch,
-            "static",
-            loops,
+            t=t,
+            duration=duration,
+            start_freqs=[freq],
+            end_freqs=[freq],
+            amplitudes=[amplitude],
+            phases=[phase],
+            ch=ch,
+            ramp_type=ramp_type,
+            loops=loops,
             modulation_frequencies=modulation_frequencies,
             modulation_amplitudes=modulation_amplitudes,
             modulation_phases=modulation_phases,
@@ -382,11 +382,15 @@ class Spectrum(IntermediateDevice):
         amplitudes,
         phases,
         ch,
+        ramp_type="static",
         loops=1,
         modulation_frequencies=[0],
         modulation_amplitudes=[0],
         modulation_phases=[0],
         mask=None,
+        detuning=0,
+        detuning_shift=0,
+        remove_self_interaction=False,
     ):
         t = self.sweep_comb(
             t=t,
@@ -396,54 +400,18 @@ class Spectrum(IntermediateDevice):
             amplitudes=amplitudes,
             phases=phases,
             ch=ch,
-            ramp_type="static",
+            ramp_type=ramp_type,
             loops=loops,
             modulation_frequencies=modulation_frequencies,
             modulation_amplitudes=modulation_amplitudes,
             modulation_phases=modulation_phases,
             mask=mask,
-        )
-        return t
-
-    def comb_no_onsite(
-        self,
-        t,
-        duration,
-        freqs,
-        amplitudes,
-        phases,
-        ch,
-        loops=1,
-        modulation_frequencies=[0],
-        modulation_amplitudes=[0],
-        modulation_phases=[0],
-        mask=None,
-        detuning=None,
-    ):
-        """Similar to the comb function, but creates a waveform with no onsite interaction by switching
-        between two different detunings.
-        """
-
-        # incomplete as of 9/28
-
-        t = self.sweep_comb(
-            t=t,
-            duration=duration,
-            start_freqs=freqs,
-            end_freqs=freqs,
-            amplitudes=amplitudes,
-            phases=phases,
-            ch=ch,
-            ramp_type="static",
-            loops=loops,
-            modulation_frequencies=modulation_frequencies,
-            modulation_amplitudes=modulation_amplitudes,
-            modulation_phases=modulation_phases,
-            mask=mask,
-            remove_self_interaction=True,
             detuning=detuning,
+            detuning_shift=detuning_shift,
+            remove_self_interaction=remove_self_interaction,
         )
         return t
+
 
     def check_waveform_parameters(self, t, duration, ch, loops, modulation_amplitudes):
         if self.sample_data.mode == b"Off":
@@ -501,10 +469,14 @@ class Spectrum(IntermediateDevice):
         mask=None,
         remove_self_interaction=False,
         detuning=0,
+        detuning_shift=0
     ):
         """
         Fundamental function that allows a user to initialize a waveform.
         """
+
+        #print("Waveform characteristics", start_freqs, end_freqs, amplitudes, ch, loops, modulation_frequencies, modulation_amplitudes, modulation_phases)
+
         # Check for common problems in a waveform
         self.check_waveform_parameters(t, duration, ch, loops, modulation_amplitudes)
 
@@ -517,6 +489,8 @@ class Spectrum(IntermediateDevice):
             duration, self.sample_data.clock_freq, extend=True
         )
         duration_c = t_end_c
+
+        #print(delta_start, delta_end)
 
         if loops > 1:
             # TODO: should this be here or in stop()? here is not mode dependent, but stop() can put it under sequence condition
@@ -549,6 +523,8 @@ class Spectrum(IntermediateDevice):
                 delta_start = 0
                 delta_end = 0
 
+        #print("Waveform characteristics", ch, loops, modulation_frequencies, modulation_amplitudes, modulation_phases)
+
         wvf = waveform(
             t_start_c,
             duration_c,
@@ -563,6 +539,7 @@ class Spectrum(IntermediateDevice):
             mask=mask,
             remove_self_interaction=remove_self_interaction,
         )
+
         assert len(start_freqs) == len(
             end_freqs
         ), "Start and End frequencies must be same length"
@@ -572,6 +549,8 @@ class Spectrum(IntermediateDevice):
         assert len(phases) == len(
             start_freqs
         ), "Phase and Frequencies must have same length"
+
+
         for i in range(len(start_freqs)):
             if (np.min(amplitudes[i]) < 0) or (np.max(amplitudes[i]) > 1):
                 raise LabscriptError(
@@ -583,10 +562,7 @@ class Spectrum(IntermediateDevice):
                 )
 
             if remove_self_interaction:
-                print(
-                    "Waveform Duration",
-                    st.time_c_to_s(wvf.duration, self.sample_data.clock_freq),
-                )
+
                 ts = np.arange(
                     0,
                     st.time_c_to_s(wvf.duration, self.sample_data.clock_freq),
@@ -599,7 +575,6 @@ class Spectrum(IntermediateDevice):
                     wvf.modulation_frequencies = [0]
                     wvf.modulation_amplitudes = [0]
                     wvf.modulation_phases = [0]
-                    print("Removing modulation features.")
                 else:
                     modulation_waveform = np.sum(
                         [
@@ -612,18 +587,26 @@ class Spectrum(IntermediateDevice):
                         ],
                         axis=0,
                     )
+                
+                # Merrick modification 15th July 2024 to check why +/- onmsite affects edge states
+                if test:=False:
+                    fast_switch_wvf = np.cos(2*np.pi*400e3*ts) # assume 200us bloch period
+                    zero_crossings = np.where(np.diff(np.sign(fast_switch_wvf)))[0]
+                else:
+                    # zero_crossings = np.where(np.diff(np.sign(modulation_waveform)))[0]
 
-                zero_crossings = np.where(np.diff(np.sign(modulation_waveform)))[0]
+                    # 2026/02/24 change to fix issue where if mod waveform has actual 0s
+                    zero_crossings = np.where(np.diff(np.signbit(modulation_waveform)))[0]
+
                 detuning_jumps = np.array(
                     [0, *zero_crossings, len(modulation_waveform) - 1]
                 )
                 if len(zero_crossings) > 0:
                     if zero_crossings[0] == 0:
                         detuning_jumps = detuning_jumps[1:]
-                print("Zero crossings", zero_crossings)
-                print("Detuning Jumps", detuning_jumps)
 
-                print("Removing self interactions")
+                # print("Removing self interactions")
+
 
                 # mod_freq = modulation_frequencies[0]
                 # mod_period = 1 / mod_freq
@@ -636,11 +619,12 @@ class Spectrum(IntermediateDevice):
                     # Question: is this the best way of getting the sign? Could be broken if it's a zero
                     # at j+1, for example.
                     dsign = np.sign(modulation_waveform[j + 1])
+
                     # dsign *= -1
 
                     wvf.add_pulse(
-                        start_freqs[i] + dsign * detuning,
-                        end_freqs[i] + dsign * detuning,
+                        start_freqs[i] + dsign * detuning + detuning_shift,
+                        end_freqs[i] + dsign * detuning + detuning_shift,
                         ts[detuning_jumps[n + 1]] - ts[detuning_jumps[n]],
                         phases[i],
                         amplitudes[i],
@@ -652,10 +636,12 @@ class Spectrum(IntermediateDevice):
                     #     mod_halfperiod, phases[i], amplitudes[i], ramp_type,
                     #     painting_function=None
                     # )
+                
             else:
+
                 wvf.add_pulse(
-                    start_freqs[i],
-                    end_freqs[i],
+                    start_freqs[i] + detuning + detuning_shift,
+                    end_freqs[i] + detuning + detuning_shift,
                     duration,
                     phases[i],
                     amplitudes[i],
@@ -664,7 +650,6 @@ class Spectrum(IntermediateDevice):
                 )
 
         self.raw_waveforms.append(wvf)
-
         return t + (loops * duration)
 
     def painted_sweep(
@@ -777,7 +762,8 @@ class Spectrum(IntermediateDevice):
         Loads profile table containing data into h5 file using a hierarchical
         data structure.
         """
-
+        print("Starting generation")
+        ss = time.time()
         device = hdf5_file.create_group("/devices/" + self.name)
 
         # Store device settings
@@ -815,6 +801,7 @@ class Spectrum(IntermediateDevice):
         dill_function_type = h5py.special_dtype(vlen=str)
 
         for i, group in enumerate(self.sample_data.waveform_groups):
+            g_start = time.time()
             group_folder = g.create_group("group " + str(i))
             settings_dtypes = [
                 ("time", np.int),
@@ -892,7 +879,6 @@ class Spectrum(IntermediateDevice):
                     grp.create_dataset("waveform_settings", data=profile_table)
 
                 if wvf.duration == 0:
-                    print(profile_table)
                     raise LabscriptError(
                         "Something went wrong in preparing waveform data. Waveform duration is 0."
                     )
@@ -946,6 +932,10 @@ class Spectrum(IntermediateDevice):
                         dtype=profile_dtypes,
                         chunks=True,
                     )
+            g_end = time.time()
+            print(f"Group {i} took {g_end - g_start} s")
+        ee = time.time()
+        print(f"Time to generate: {ee - ss}")
 
     def stop(self):
         self.check_channel_collisions(self.raw_waveforms)
@@ -959,7 +949,6 @@ class Spectrum(IntermediateDevice):
             nonPeriodicWvfs = list(
                 [k for k in self.raw_waveforms if k.is_periodic == False]
             )
-
             # Make nonperiodic groups
             nonPeriodicWvfGroups = self.make_waveform_groups(nonPeriodicWvfs)
 
@@ -1251,16 +1240,19 @@ class Spectrum(IntermediateDevice):
             ]
         )
 
+
         overlapGroups = self.make_waveform_groups(overlappedWvfs)
         for ogroup in overlapGroups:
             if len(ogroup.waveforms) > 1:
                 unique_wvf_triplets = {
                     (i.time, i.loops, i.duration) for i in ogroup.waveforms
                 }
+                
                 if len(unique_wvf_triplets) == 1:
                     result_waveforms.append(ogroup.waveforms)
                 else:
                     for i in ogroup.waveforms:
+                        print('This is just a separator')
                         print(i)
                     # TODO: can we accomodate this?
                     raise LabscriptError(
@@ -1279,6 +1271,7 @@ class Spectrum(IntermediateDevice):
                 # Start of the next loop immediately following t_start_p
                 t_n = int(t0 + math.ceil(float(t_start_p - t0) / float(dur)) * dur)
                 n_full_loops = int(math.floor(float(t_end_p - t_n) / float(dur)))
+
 
                 if (
                     t_n > t_end_p
@@ -1413,7 +1406,6 @@ class SpectrumWorker(Worker):
         self.pulse_dictionary = {}
 
     def card_settings(self):
-        print("")
         # Close the card if it's already open
         if self.card != 1:
             print("Closing card")
@@ -1440,9 +1432,20 @@ class SpectrumWorker(Worker):
             # clock mode internal PLL
             sp.spcm_dwSetParam_i32(self.card, sp.SPC_CLOCKMODE, sp.SPC_CM_INTPLL)
 
+        # --- PLL lock check: apply clock settings now so a lock failure surfaces here ---
+        try:
+            sp.spcm_dwSetParam_i32(self.card, sp.SPC_M2CMD, sp.M2CMD_CARD_WRITESETUP)
+        except Exception as e:
+            if "CLOCKNOTLOCKED" in str(e):
+                raise LabscriptError(
+                    "Spectrum card reference clock failed to lock — check external "
+                    "reference signal amplitude/frequency at the REF input."
+                )
+            raise
+
         sp.spcm_dwSetParam_i32(self.card, sp.SPC_SAMPLERATE, sp.int32(self.clock_freq))
-        sp.spcm_dwSetParam_i32(self.card, sp.SPC_TRIG_EXT1_MODE, sp.SPC_TM_POS)
-        sp.spcm_dwSetParam_i32(self.card, sp.SPC_TRIG_ORMASK, sp.SPC_TMASK_EXT1)
+        sp.spcm_dwSetParam_i32(self.card, sp.SPC_TRIG_EXT0_MODE, sp.SPC_TM_POS) # was EXT1
+        sp.spcm_dwSetParam_i32(self.card, sp.SPC_TRIG_ORMASK, sp.SPC_TMASK_EXT0) # was EXT1
 
         self.mode_dict = {
             b"single": sp.SPC_REP_STD_SINGLE,
@@ -1527,12 +1530,14 @@ class SpectrumWorker(Worker):
             cd = channel_dicts[channel.port]
 
             channel_enable_word |= cd["ch_mask"]
+
             sp.spcm_dwSetParam_i32(self.card, cd["amp_address"], sp.int32(amplitude))
             sp.spcm_dwSetParam_i32(self.card, cd["enable_address"], 1)
 
         sp.spcm_dwSetParam_i32(
             self.card, sp.SPC_CHENABLE, sp.int32(channel_enable_word)
         )
+
 
         #### SEQUENCE MODE ####
         if self.mode == b"sequence":
@@ -1722,6 +1727,16 @@ class SpectrumWorker(Worker):
                             else:
                                 if wvf.remove_self_interaction:
                                     for pulse in wvf.pulses:
+                                        # To be honest, I (Ocean, 2025/09/29) don't really know what method means
+                                        # Basically, trying to run a modulated probe pulse in Sequence mode would consistently yield the error
+                                        # "UnboundLocalError: local variable 'method' referenced before assignment"
+                                        # As such, we copied this if-else block from the wvf.remove_self_interaction == False block
+                                        # This made the error go away. 
+
+                                        if pulse.ramp_type != b"static":  # ramping
+                                            method = pulse.ramp_type
+                                        else:  # static
+                                            method = b"linear"
                                         tsegment = np.arange(
                                             0, pulse.ramp_time, 1 / self.clock_freq
                                         )
@@ -1857,6 +1872,7 @@ class SpectrumWorker(Worker):
                                             axis=0,
                                         )
                                     )
+
                                 else:
                                     modulation_waveform = np.sum(
                                         [
@@ -1913,7 +1929,7 @@ class SpectrumWorker(Worker):
 
                                 assert (
                                     np.min(mask_values) >= -1
-                                ), f"Mask gets too small, {mask_values}"
+                                ), f"Mask gets too small, {np.min(mask_values), np.max(mask_values)}"
                                 assert np.max(mask_values) <= 1, "Mask gets too large"
                                 assert (
                                     pulse_data.shape == mask_values.shape
@@ -2112,6 +2128,8 @@ class SpectrumWorker(Worker):
         except AssertionError:
             print("Not equal, generating new samples")
             generate_samples = True
+
+
         if generate_samples:
             self.previous_settings = device_dict
         
@@ -2282,6 +2300,10 @@ class SpectrumWorker(Worker):
         return self.transition_to_manual(abort=True)
 
     def transition_to_manual(self, abort=False):
+        # if len(self.channels) > 2:
+        #     self.shutdown()
+        #     self.init()
+        
         if abort:
             self.shutdown()
             self.init()

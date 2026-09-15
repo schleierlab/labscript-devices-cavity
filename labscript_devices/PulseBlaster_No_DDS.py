@@ -49,6 +49,8 @@ class PulseBlaster_No_DDS(PulseBlaster):
         dig_outputs, ignore = self.get_direct_outputs()
         pb_inst = self.convert_to_pb_inst(dig_outputs, [], {}, {}, {})
         self._check_wait_monitor_ok() 
+
+        self.write_pb_inst_to_h5(pb_inst, hdf5_file)
 from blacs.tab_base_classes import Worker, define_state
 from blacs.tab_base_classes import MODE_MANUAL, MODE_TRANSITION_TO_BUFFERED, MODE_TRANSITION_TO_MANUAL, MODE_BUFFERED  
 

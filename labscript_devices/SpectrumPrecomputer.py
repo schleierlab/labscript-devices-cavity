@@ -120,7 +120,7 @@ class waveform:
         self.has_mask = True
         self.remove_self_interaction = remove_self_interaction
         if mask == None:
-            mask = np.vectorize(lambda x: 1)
+            mask =lambda x: np.ones_like(x)
             self.has_mask = False
         self.mask = mask
         # Make new copies of pulses.  Why do we need to do this??
@@ -411,6 +411,17 @@ class SpectrumPrecomputer:
                     else:
                         if wvf.remove_self_interaction:
                             for pulse in wvf.pulses:
+                                # To be honest, I (Ocean, 2025/09/29) don't really know what method means
+                                # Basically, trying to run a modulated probe pulse in Sequence mode would consistently yield the error
+                                # "UnboundLocalError: local variable 'method' referenced before assignment"
+                                # As such, we copied this if-else block from the wvf.remove_self_interaction == False block
+                                # This made the error go away. 
+
+                                if pulse.ramp_type != b"static":  # ramping
+                                    method = pulse.ramp_type
+                                else:  # static
+                                    method = b"linear"
+                                    
                                 tsegment = np.arange(
                                     0, pulse.ramp_time, 1 / self.clock_freq
                                 )
@@ -650,6 +661,42 @@ class SpectrumPrecomputer:
 
         return self.output_name, self.output_groups_name
 
+    def get_pulse_data(self, wvf):
+        if hash(wvf) in self.pulse_dictionary.keys():
+            if verbose:
+                print("Found waveform")
+            pulse_data = self.pulse_dictionary[hash(wvf)]
+            return pulse_data
+        if wvf.remove_self_interaction:
+            pulse_data = self.get_pulse_data_no_self_interaction(wvf)
+
+    def get_pulse_data_no_self_interaction(self, wvf):
+        for pulse in wvf.pulses:
+            tsegment = np.arange(
+                0, pulse.ramp_time, 1 / self.clock_freq
+            )
+            c = chirp(
+                tsegment,
+                f0=pulse.start,
+                t1=pulse.ramp_time,
+                f1=pulse.end,
+                method=method.decode(),
+                phi=pulse.phase,
+            )
+            pulse_data_temp = np.append(pulse_data_temp, c)
+
+        if len(pulse_data) > len(pulse_data_temp):
+            pulse_data[: len(pulse_data_temp)] = (
+                pulse_data_temp * (2**15 - 1) * pulse.amp
+            )
+        else:
+            pulse_data = (
+                pulse_data_temp[: len(pulse_data)]
+                * (2**15 - 1)
+                * pulse.amp
+            )
+        return pulse_data
+    
     def h5group_to_dict(self, group):
         """
         ....
@@ -857,7 +904,7 @@ def main_loop():
         all_shots = blacs_client.queued_shots()
 
         # Every check_every_n shots, we check for more shots from BLACS.
-        check_every_n = 5
+        check_every_n = 2
         counter = 0
         completed_shots = []
 
