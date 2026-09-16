@@ -385,7 +385,8 @@ class AD9914Worker(Worker):
 
         self.IOUpdate()
 
-
+        print(reg0)
+        print(self.ReadRegister(0))
         # Hack - must always restart device on first startup
         if self.ReadRegister(0) != reg0:
             raise LabscriptError("Registers did not reset correctly - please restart the device")
@@ -468,6 +469,14 @@ class AD9914Worker(Worker):
     def ReadRegister (self, addr):
         instr = self.GetSpiInstruction(1, addr)
 
+        # The ADI DLL's SpiRead intermittently returns the buffer from the previous
+        # USB transaction, so a single read can hand back a different register's
+        # contents. Observed on both eval boards, and reproducible with direct
+        # in-process ctypes as well as through the 32-bit bridge, so it is the DLL
+        # or the board firmware rather than anything in our code. Discard the first
+        # result and keep the second, the same way the write paths here already
+        # issue every WriteRegister twice.
+        self._bridge.spi_read(instr, self.regLength, 0)
         regVals = self._bridge.spi_read(instr, self.regLength, 0)
 
         return bytearray(struct.pack('@I', regVals))
