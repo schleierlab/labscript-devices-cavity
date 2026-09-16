@@ -384,9 +384,11 @@ class AD9914Worker(Worker):
         self.WriteRegister(1, reg1)
 
         self.IOUpdate()
-
-        print(reg0)
-        print(self.ReadRegister(0))
+      
+        # # Potentially useful debug:
+        # print(reg0)
+        # print(self.ReadRegister(0))
+      
         # Hack - must always restart device on first startup
         if self.ReadRegister(0) != reg0:
             raise LabscriptError("Registers did not reset correctly - please restart the device")
