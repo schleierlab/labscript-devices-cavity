@@ -292,6 +292,14 @@ from blacs.tab_base_classes import MODE_MANUAL, MODE_TRANSITION_TO_BUFFERED, MOD
 
 from blacs.device_base_class import DeviceTab
 
+# adiddseval.dll and its dependency ADI_CYUSB_USB4.dll are 32-bit only, so they cannot
+# be loaded from this 64-bit interpreter. AD9914Bridge spawns a small 32-bit helper
+# process that owns the DLL and forwards the eleven entry points to it. The bridge
+# imports only the standard library, which is what makes this possible at all: h5py has
+# shipped no 32-bit Windows wheel since 2.10.0/cp38, so running the whole worker under
+# 32-bit Python is not an option. See ad9914_bridge.py / ad9914_bridge32.py.
+from labscript_devices.ad9914_bridge import AD9914Bridge, BridgeError
+
 @BLACS_tab
 class AD9914Tab(DeviceTab):
     def initialise_GUI(self):
@@ -343,30 +351,13 @@ class AD9914Worker(Worker):
     def init(self):
         global h5py; import labscript_utils.h5_lock, h5py
 
-        import os
-        print(os.getcwd())
-        
-        # 01/11/2023: switched to full path, which prevented the error of not finding adiddseval
-        # self._dll = windll.adiddseval
-        self._dll = windll.LoadLibrary(r"C:\labscript-suite\labscript-devices\labscript_devices\adiddseval.dll")
-
-        self._fFindHardware = self._dll.FindHardware
-        self._fGetHardwareHandles = self._dll.GetHardwareHandles
-        self._fGetHardwareCount = self._dll.GetHardwareCount
-        self._fIsConnected = self._dll.IsConnected
-        self._fGetPortConfig = self._dll.GetPortConfig
-        self._fSetPortConfig = self._dll.SetPortConfig
-        self._fGetPortValue = self._dll.GetPortValue
-        self._fSetPortValue = self._dll.SetPortValue
-        self._fGetSpiInstruction = self._dll.GetSpiInstruction
-        self._fSpiRead = self._dll.SpiRead
-        self._fSpiWrite = self._dll.SpiWrite
+        # Spawn the 32-bit helper process that owns adiddseval.dll.
+        self._bridge = AD9914Bridge(self.instance)
 
 
         self.smart_cache = {'PROFILE_DATA': None,
                             'SWEEP_DATA': None}
 
-        self.handle = None
         self.vid = 0x0456
         self.pid = 0xEE1F
         self.portConfig = [0x7f, 0xff, 0x00, 0xff]  # Configures the USB Cypress chip's ports as inputs or outputs
@@ -441,56 +432,45 @@ class AD9914Worker(Worker):
     def FindHardware (self):
         print("Locating hardware...")
 
-        vidArry = c_int*1
-        pidArry = c_int*1
-        vid = vidArry(self.vid)
-        pid = pidArry(self.pid)
-        length = c_int(1)
-        if not self._fFindHardware(byref(vid),byref(pid),length):
-            raise LabscriptError("Could not find hardware")
-
-        handleArray = c_int*self._fGetHardwareCount()
-        handle = handleArray(0)
-        self._fGetHardwareHandles(byref(handle))
-        self.handle = c_int(handle[self.instance])
+        # The board index ("handle") is selected and retained inside the 32-bit
+        # process; it is meaningful only to the DLL instance that enumerated.
+        try:
+            count = self._bridge.find_hardware(self.vid, self.pid, self.instance)
+        except BridgeError as e:
+            raise LabscriptError("Could not find hardware: %s" % e)
+        print("Found %d board(s), using instance %d" % (count, self.instance))
 
 
     def IsConnected (self):
         print("Checking connection...")
-        connected = bool(self._fIsConnected(self.handle))
+        connected = bool(self._bridge.is_connected())
         if connected:
             print("Device is connected")
 
         return connected
 
     def GetPortConfig (self, port):
-        val = c_byte()
-        self._fGetPortConfig(self.handle, port, byref(val))
-        return val.value
+        return self._bridge.get_port_config(port)
 
     # Configures the USB Cypress chip's ports as inputs or outputs
     def SetPortConfig (self):
         print("Setting configuration of ports...")
 
         for port in range(4):
-            self._fSetPortConfig(self.handle, port, self.portConfig[port])
+            self._bridge.set_port_config(port, self.portConfig[port])
 
     def GetPortValue (self, port):
-        data = c_byte()
-        self._fGetPortValue(self.handle, port, byref(data))
-        return data.value
+        return self._bridge.get_port_value(port)
 
     def SetPortValue (self, port, data):
-        self._fSetPortValue(self.handle, port, data)
+        self._bridge.set_port_value(port, data)
 
     def ReadRegister (self, addr):
         instr = self.GetSpiInstruction(1, addr)
 
-        instr = c_byte(instr)
-        regVals = c_uint32()
-        self._fSpiRead(self.handle, byref(instr), sizeof(instr), byref(regVals), self.regLength, 0)
+        regVals = self._bridge.spi_read(instr, self.regLength, 0)
 
-        return bytearray(struct.pack('@I', regVals.value))
+        return bytearray(struct.pack('@I', regVals))
 
     def WriteRegister (self, addr, data, update=False):
 
@@ -509,17 +489,15 @@ class AD9914Worker(Worker):
         dataCopy.append(0)
         dataCopy.append(0)
 
-        writeData = c_uint64(struct.unpack('Q',dataCopy)[0])
-        self._fSpiWrite(self.handle, byref(writeData), self.regLength+1, 0)
+        writeData = struct.unpack('Q',dataCopy)[0]
+        self._bridge.spi_write(writeData, self.regLength+1, 0)
 
         if update:
             self.IOUpdate()
 
 
     def GetSpiInstruction (self, rw, addr):
-        instr = c_byte()
-        self._fGetSpiInstruction(rw, addr, byref(instr), sizeof(instr))
-        return instr.value
+        return self._bridge.get_spi_instruction(rw, addr)
 
     def IOUpdate (self):
         # Pushes instructions from the buffer into the actual DDS register (must do this in order for the DDS to actually update its signal)
@@ -823,4 +801,9 @@ class AD9914Worker(Worker):
         return True
 
     def shutdown(self):
+        # Tear down the 32-bit helper process along with this worker.
+        bridge = getattr(self, '_bridge', None)
+        if bridge is not None:
+            bridge.close()
+            self._bridge = None
         return
