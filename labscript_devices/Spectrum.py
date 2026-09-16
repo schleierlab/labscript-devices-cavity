@@ -1399,6 +1399,40 @@ class SpectrumWorker(Worker):
         )
         self.max_channels = max_channels.value
 
+        # Log which physical card this address actually opened. card_address is
+        # only an index into the driver's enumeration order -- it names no
+        # serial or slot -- so reslotting a card, or adding one on a lower PCI
+        # bus, silently repoints it at different hardware. Recording the type
+        # and serial here puts the address -> hardware mapping in the BLACS log
+        # on every startup. error_checking=False so a failed identity read can
+        # never stop the tab from coming up.
+        card_type = sp.int32(0)
+        card_serial = sp.int32(0)
+        modules = sp.int32(0)
+        sp.spcm_dwGetParam_i32(
+            self.card, sp.SPC_PCITYP, sp.byref(card_type), error_checking=False
+        )
+        sp.spcm_dwGetParam_i32(
+            self.card, sp.SPC_PCISERIALNO, sp.byref(card_serial),
+            error_checking=False,
+        )
+        sp.spcm_dwGetParam_i32(
+            self.card, sp.SPC_MIINST_MODULES, sp.byref(modules),
+            error_checking=False,
+        )
+        self.card_serial = card_serial.value
+        print(
+            "{} opened {}, serial {}, {} channels ({} module(s) x {} ch/module)"
+            .format(
+                card_address.decode(),
+                st.szTypeToName(card_type.value),
+                self.card_serial,
+                modules.value * self.max_channels,
+                modules.value,
+                self.max_channels,
+            )
+        )
+
         self.samplesPerChunk = 32
         self.bytesPerSample = 2
 
