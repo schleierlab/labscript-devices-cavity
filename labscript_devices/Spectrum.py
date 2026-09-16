@@ -771,10 +771,10 @@ class Spectrum(IntermediateDevice):
         settings_dtypes = np.dtype(
             [
                 ("mode", "S10"),
-                ("clock_freq", np.float),
-                ("use_ext_clock", np.int),
-                ("ext_clock_freq", np.float),
-                ("export_data", np.bool),
+                ("clock_freq", float),
+                ("use_ext_clock", int),
+                ("ext_clock_freq", float),
+                ("export_data", bool),
                 ("export_path", str_dt),
             ]
         )
@@ -788,7 +788,7 @@ class Spectrum(IntermediateDevice):
         device.create_dataset("device_settings", data=settings_table)
 
         # Store channel settings
-        channel_dtypes = [("power", np.float), ("name", "S10"), ("port", int)]
+        channel_dtypes = [("power", float), ("name", "S10"), ("port", int)]
         channel_table = np.zeros(len(self.sample_data.channels), dtype=channel_dtypes)
         for i, channel in enumerate(self.sample_data.channels):
             channel_table[i]["power"] = channel.power
@@ -804,9 +804,9 @@ class Spectrum(IntermediateDevice):
             g_start = time.time()
             group_folder = g.create_group("group " + str(i))
             settings_dtypes = [
-                ("time", np.int),
-                ("duration", np.int),
-                ("loops", np.int),
+                ("time", int),
+                ("duration", int),
+                ("loops", int),
             ]
             settings_table = np.array((0, 0, 0), dtype=settings_dtypes)
             settings_table["time"] = group.time
@@ -885,15 +885,15 @@ class Spectrum(IntermediateDevice):
 
                 # Store pulses
                 profile_dtypes = [
-                    ("start_freq", np.float),
-                    ("end_freq", np.float),
-                    ("ramp_time", np.float),
-                    ("phase", np.float),
-                    ("amp", np.float),
+                    ("start_freq", float),
+                    ("end_freq", float),
+                    ("ramp_time", float),
+                    ("phase", float),
+                    ("amp", float),
                     ("ramp_type", "S10"),
                     ("painting_function", dill_function_type), 
-                    ("painting_freq", np.bool),
-                    ("painting_list", np.bool),
+                    ("painting_freq", bool),
+                    ("painting_list", bool),
                     ("pulse_str", "S20"),
                 ]
                 profile_table = np.zeros(len(wvf.pulses), dtype=profile_dtypes)

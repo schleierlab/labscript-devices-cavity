@@ -150,11 +150,11 @@ class AgilentE4422B(IntermediateDevice):
         grp = hdf5_file.create_group('/devices/'+self.name)
 
 
-        profile_dtypes = [('freq',np.float),
-                          ('phase',np.float),
-                          ('amp',np.float),
+        profile_dtypes = [('freq',float),
+                          ('phase',float),
+                          ('amp',float),
                           ('ext_in',bool), #EE
-                          ('freq_dev',np.float)] #EE
+                          ('freq_dev',float)] #EE
 
 
         profile_table = np.zeros(1, dtype=profile_dtypes)
@@ -174,10 +174,10 @@ class AgilentE4422B(IntermediateDevice):
 
 
         if self.sweep:
-            sweep_dtypes = [('sweep_low',np.float),
-                            ('sweep_high',np.float),
-                            ('sweep_duration',np.float),
-                            ('sweep_samplerate',np.float)]
+            sweep_dtypes = [('sweep_low',float),
+                            ('sweep_high',float),
+                            ('sweep_duration',float),
+                            ('sweep_samplerate',float)]
 
             sweep_table = np.empty(1, dtype=sweep_dtypes)
 
