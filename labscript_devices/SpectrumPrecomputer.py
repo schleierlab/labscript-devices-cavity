@@ -15,8 +15,9 @@ import math
 import numpy as np
 import dill as pickle
 
-sys.path.append("..")
-sys.path.append("C:/Users/QuantumEngineer")
+# (Removed two dead sys.path hacks that pointed at '..' and the old
+#  C:/Users/QuantumEngineer profile. They supported the commented-out
+#  Spectrum import below; those names are all defined in this file now.)
 # from Spectrum import sequence_instr, pulse, waveform, waveform_group, channel_settings
 from .spcm import pyspcm as sp
 from .spcm import spcm_errors as se
@@ -36,10 +37,23 @@ import h5py
 import random
 
 
-blacs_client = BlacsClient(host="171.64.56.36", port=25227)
+# Host and port come from labconfig: [servers] blacs and [ports] remote_blacs.
+# Previously hard-coded to 171.64.56.36 (the retired DESKTOP-AJIQQBC control PC),
+# which made this script hang silently on the 60 s communication_timeout.
+blacs_client = BlacsClient()
 
 
 PRECOMPUTE_FOLDER = "C:\\labscript-suite\\labscript-devices\\labscript_devices\\SpectrumPrecompute\\"
+
+# Device name as it appears in the shot file's /devices group and in the
+# connection table. Was "SpectrumM4X" before the card was replaced.
+SPECTRUM_DEVICE_NAME = "SpectrumM4i"
+
+# This folder is working scratch space and is not in version control, so it is
+# absent on a fresh checkout or a new control PC. Without it, np.save raises
+# FileNotFoundError -- which main_loop misreports as 'shot does not exist
+# anymore' -- and the 12 h cleanup dies with StopIteration on every pass.
+os.makedirs(PRECOMPUTE_FOLDER, exist_ok=True)
 
 ### get files in queue
 
@@ -885,7 +899,7 @@ def generate_npy(shots):
     try:
         shot = shots.get()
         spc = SpectrumPrecomputer(shot)
-        spc.transition_to_buffered("SpectrumM4X")
+        spc.transition_to_buffered(SPECTRUM_DEVICE_NAME)
         all_dict_files[shot] = spc.device_dict_name
         all_files[shot], all_groups_files[shot] = spc.compute_waveform()
     except FileNotFoundError:
@@ -925,7 +939,7 @@ def main_loop():
                 if shot not in all_files:
                     spc = SpectrumPrecomputer(shot, pulse_dictionary)
                     # Should throw a FileExistsError if file was already precomputed
-                    spc.transition_to_buffered("SpectrumM4X")
+                    spc.transition_to_buffered(SPECTRUM_DEVICE_NAME)
                     if spc.generate_samples:
                         all_files[shot], all_groups_files[shot] = spc.compute_waveform()
                     pulse_dictionary = spc.pulse_dictionary

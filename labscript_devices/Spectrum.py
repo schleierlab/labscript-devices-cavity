@@ -4,7 +4,13 @@
 #                                                                   #
 #####################################################################
 
-from labscript import IntermediateDevice, Device, LabscriptError, DigitalOut
+from labscript import (
+    IntermediateDevice,
+    Device,
+    LabscriptError,
+    DigitalOut,
+    set_passed_properties,
+)
 from labscript_devices import BLACS_tab
 from blacs.tab_base_classes import Worker
 from blacs.device_base_class import DeviceTab
@@ -223,9 +229,20 @@ class sequence_instr:
 
 ##### Labscript classes #######################################################
 class Spectrum(IntermediateDevice):
-    def __init__(self, name, parent_device, card_address, trigger, triggerDur=5e-6, worker=None):
+    @set_passed_properties(
+        property_names={"connection_table_properties": ["expected_serial"]}
+    )
+    def __init__(self, name, parent_device, trigger, card_address, expected_serial, triggerDur=5e-6,
+                 worker=None):
         self.BLACS_connection = card_address
         Device.__init__(self, name, parent_device, connection=self.BLACS_connection, worker=worker)
+
+        # card_address is only an index into the driver's enumeration order, so it
+        # can silently repoint at different hardware when a card is reslotted or
+        # another is added on a lower PCI bus. Naming the card's serial here makes
+        # BLACS refuse to start the tab in that case instead of driving the wrong
+        # card. Look the serial up with tools/enum_spectrum.py (BLACS closed).
+        self.expected_serial = int(expected_serial)
 
         self.set_mode("Off")  # Initialize data structure
         self.samplesPerChunk = 32
@@ -1367,12 +1384,25 @@ class SpectrumTab(DeviceTab):
         self.auto_place_widgets(("RF Output", dds_widgets))
 
         # Create and set the primary worker
-        self.instance = (
-            self.settings["connection_table"]
-            .find_by_name(self.device_name)
-            .BLACS_connection
+        connection_table_device = self.settings["connection_table"].find_by_name(
+            self.device_name
         )
-        self.create_worker("main_worker", SpectrumWorker, {"instance": self.instance})
+        self.instance = connection_table_device.BLACS_connection
+        # expected_serial is mandatory, so a connection table compiled before it
+        # existed has no such property. Say that plainly here rather than letting
+        # the worker fail on int(None).
+        if "expected_serial" not in connection_table_device.properties:
+            raise LabscriptError(
+                "{} has no expected_serial in the compiled connection table. "
+                "Recompile the connection table so BLACS can check that this "
+                "address opens the card it is supposed to.".format(self.device_name)
+            )
+        expected_serial = connection_table_device.properties["expected_serial"]
+        self.create_worker(
+            "main_worker",
+            SpectrumWorker,
+            {"instance": self.instance, "expected_serial": expected_serial},
+        )
         self.primary_worker = "main_worker"
 
         # Set the capabilities of this device
@@ -1432,6 +1462,28 @@ class SpectrumWorker(Worker):
                 self.max_channels,
             )
         )
+
+        # Refuse to run against the wrong card if the connection table named a
+        # serial. Close the handle first so a rejected card is not left open.
+        if self.card_serial != int(self.expected_serial):
+            sp.spcm_vClose(self.card)
+            if self.card_serial == 0:
+                raise LabscriptError(
+                    "{} expects the card with serial {}, but the serial of the "
+                    "card it opened could not be read, so the card could not "
+                    "be verified.".format(
+                        card_address.decode(), self.expected_serial
+                    )
+                )
+            raise LabscriptError(
+                "{} opened the card with serial {}, but the connection table "
+                "expects serial {}. The /dev/spcmN index is assigned by the "
+                "driver in PCI enumeration order, so it changes when cards are "
+                "added or reslotted. Run tools/enum_spectrum.py with BLACS "
+                "closed to see which address each card now has.".format(
+                    card_address.decode(), self.card_serial, self.expected_serial
+                )
+            )
 
         self.samplesPerChunk = 32
         self.bytesPerSample = 2
